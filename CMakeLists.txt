@@ -63,6 +63,7 @@ add_executable(main
     control_algo/line_following.c
     control_algo/obstacle_scanner.c
     control_algo/avoidance_maneuver.c
+    control_algo/obstacle_control.c
     
     # Utilities
     utilities/timer_manager.c

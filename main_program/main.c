@@ -21,6 +21,8 @@
 #include "pico/stdlib.h"
 #include <stdio.h>
 #include <math.h>
+//State
+#include "state_machine.h"
 
 // Hardware drivers
 #include "motor.h"
@@ -29,6 +31,7 @@
 #include "ir_sensor.h"
 #include "ultrasonic.h"
 #include "servo.h"
+#include "obstacle_control.h"
 
 // Control algorithms
 #include "line_following.h"
@@ -46,16 +49,7 @@
 // SYSTEM STATE MACHINE
 // ============================================================================
 
-typedef enum {
-    STATE_IDLE,
-    STATE_LINE_FOLLOWING,
-    STATE_OBSTACLE_DETECTED,
-    STATE_OBSTACLE_SCANNING,
-    STATE_OBSTACLE_AVOIDING,
-    STATE_RETURNING_TO_LINE,
-    STATE_LINE_LOST,
-    STATE_STOPPED
-} SystemState;
+
 
 static SystemState current_state = STATE_IDLE;
 static SystemState previous_state = STATE_IDLE;
@@ -82,14 +76,13 @@ static uint32_t state_entry_time = 0;
 // ============================================================================
 
 static void init_hardware(void);
-static bool check_for_obstacles(void);
-static void handle_obstacle_detected(void);
-static void handle_obstacle_scanning(void);
-static void handle_obstacle_avoidance(void);
 static void handle_returning_to_line(void);
 static void handle_line_lost(void);
-static void change_state(SystemState new_state);
 static const char* state_to_string(SystemState state);
+
+SystemState get_current_state(void) {
+    return current_state;
+}
 
 // ============================================================================
 // HARDWARE INITIALIZATION
@@ -154,7 +147,7 @@ static void init_hardware(void) {
 // STATE MANAGEMENT
 // ============================================================================
 
-static void change_state(SystemState new_state) {
+void change_state(SystemState new_state) {
     if (new_state != current_state) {
         previous_state = current_state;
         current_state = new_state;
@@ -187,91 +180,7 @@ static const char* state_to_string(SystemState state) {
     }
 }
 
-// ============================================================================
-// OBSTACLE DETECTION
-// ============================================================================
 
-static bool check_for_obstacles(void) {
-    // Point servo forward
-    servo_set_angle(ANGLE_CENTER);
-    sleep_ms(100);
-    
-    // Read distance
-    uint64_t distance;
-    int status = ultrasonic_get_distance(TRIG_PIN, ECHO_PIN, &distance);
-    
-    if (status == SUCCESS) {
-        printf("[OBSTACLE] Forward distance: %llu cm", distance);
-        
-        if (distance <= OBSTACLE_CHECK_DISTANCE_CM) {
-            printf(" ⚠️  OBSTACLE DETECTED!\n");
-            return true;
-        } else {
-            printf(" ✓\n");
-            return false;
-        }
-    } else {
-        printf("[OBSTACLE] Sensor error\n");
-        return false;
-    }
-}
-
-// ============================================================================
-// OBSTACLE HANDLING
-// ============================================================================
-
-static void handle_obstacle_detected(void) {
-    printf("\n[OBSTACLE] Obstacle detected - stopping motors\n");
-    
-    // Stop motors
-    motor_stop(M1A, M1B);
-    motor_stop(M2A, M2B);
-    
-    // Move to scanning state
-    change_state(STATE_OBSTACLE_SCANNING);
-}
-
-static void handle_obstacle_scanning(void) {
-    printf("\n[OBSTACLE] Performing scan...\n");
-    
-    // Perform scan
-    ScanResult result = scanner_perform_scan();
-    scanner_print_results(result);
-    
-    // Determine avoidance direction
-    AvoidanceDirection direction = scanner_get_best_avoidance_direction(result);
-    
-    if (direction == AVOID_NONE) {
-        printf("[OBSTACLE] No clear path - stopping\n");
-        change_state(STATE_STOPPED);
-        return;
-    }
-    
-    // Start avoidance maneuver
-    if (avoidance_start(direction)) {
-        change_state(STATE_OBSTACLE_AVOIDING);
-    } else {
-        printf("[OBSTACLE] Failed to start avoidance\n");
-        change_state(STATE_STOPPED);
-    }
-}
-
-static void handle_obstacle_avoidance(void) {
-    // Update avoidance maneuver
-    AvoidanceState avoid_state = avoidance_update();
-    
-    // Check if complete
-    if (avoidance_is_complete()) {
-        if (avoidance_was_successful()) {
-            printf("\n[OBSTACLE] Avoidance complete - returning to line following\n");
-            avoidance_reset();
-            change_state(STATE_RETURNING_TO_LINE);
-        } else {
-            printf("\n[OBSTACLE] Avoidance failed\n");
-            change_state(STATE_STOPPED);
-        }
-    }
-}
 
 static void handle_returning_to_line(void) {
     // After avoidance, we should be near the line
